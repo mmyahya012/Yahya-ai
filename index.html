@@ -957,8 +957,8 @@
   }
 
   function formatText(t) {
-    // Helper to wrap list items in proper list tags
-    const wrapListBlock = (tag, items) => '___LISTBLOCK___<' + tag + '>' + items.join('') + '</' + tag + '>___/LISTBLOCK___';
+    // Helper to wrap list items in proper list tags using template literals
+    const wrapListBlock = (tag, items) => `___LISTBLOCK___<${tag}>${items.join('')}</${tag}>___/LISTBLOCK___`;
 
     let s = t
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -1025,6 +1025,7 @@
     return s;
   }
   function escapeAttr(s) { return s.replace(/'/g,"\\'").replace(/\n/g,' ').substring(0,200); }
+  function trimBlankLines(text) { return text.replace(/^\n+/, '').replace(/\n+$/, ''); }
 
   function copyText(btn, text) {
     navigator.clipboard.writeText(text).then(() => {
@@ -1092,13 +1093,6 @@
       : `API request failed after ${API_MAX_RETRIES} attempts: ${lastErr?.message || 'Unknown error'}`);
   }
   function cleanFakLabText(payload) {
-    // Helper: remove only leading/trailing blank lines, preserving intentional formatting
-    const trimBlankLines = (text) => {
-      return text
-        .replace(/^\n+/, '')  // Remove only leading blank lines
-        .replace(/\n+$/, '');  // Remove only trailing blank lines
-    };
-
     if (typeof payload === 'string' && payload.trim()) {
       return trimBlankLines(payload);
     }
