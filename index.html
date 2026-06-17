@@ -687,7 +687,10 @@
   function userKey() { return 'yai_chats_' + (currentUser ? currentUser.email : 'guest'); }
   function readJSON(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; }
-    catch { return fallback; }
+    catch (err) {
+      console.warn('Failed to parse localStorage JSON for key:', key, err);
+      return fallback;
+    }
   }
   function sanitizeUsersDb(usersDb) {
     let changed = false;
@@ -728,9 +731,14 @@
     const usersDb = loadUsersDb();
     const sessions = loadSessionsDb();
     const record = sessions[session.email];
+    const now = Date.now();
+    const isMissingRecord = !record;
+    const isTokenMismatch = !isMissingRecord && record.token !== session.token;
+    const isMissingExpiry = !isMissingRecord && !record.expiresAt;
+    const isExpired = !isMissingRecord && record.expiresAt < now;
 
-    if (!record || record.token !== session.token || !record.expiresAt || record.expiresAt < Date.now()) {
-      if (record && record.expiresAt < Date.now()) {
+    if (isMissingRecord || isTokenMismatch || isMissingExpiry || isExpired) {
+      if (isExpired) {
         delete sessions[session.email];
         saveSessionsDb(sessions);
       }
