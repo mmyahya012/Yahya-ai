@@ -963,7 +963,42 @@
         const code = m.replace(/```(\w+)?/g,'').trim();
         return `<pre><code>${code}</code></pre>`;
       })
-      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>');
+
+    // Handle markdown lists before inline formatting
+    const lines = s.split('\n');
+    let result = [];
+    let inUL = false, inOL = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const ulMatch = line.match(/^[\-\*]\s+(.*)$/);
+      const olMatch = line.match(/^\d+\.\s+(.*)$/);
+
+      if (ulMatch) {
+        if (!inUL) {
+          if (inOL) result.push('</ol>'); inOL = false;
+          result.push('<ul>');
+          inUL = true;
+        }
+        result.push(`<li>${ulMatch[1]}</li>`);
+      } else if (olMatch) {
+        if (!inOL) {
+          if (inUL) result.push('</ul>'); inUL = false;
+          result.push('<ol>');
+          inOL = true;
+        }
+        result.push(`<li>${olMatch[1]}</li>`);
+      } else {
+        if (inUL) { result.push('</ul>'); inUL = false; }
+        if (inOL) { result.push('</ol>'); inOL = false; }
+        result.push(line);
+      }
+    }
+    if (inUL) result.push('</ul>');
+    if (inOL) result.push('</ol>');
+
+    s = result.join('\n')
       .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
       .replace(/\*(.+?)\*/g,'<em>$1</em>')
       .replace(/\n/g,'<br>');
@@ -1037,7 +1072,16 @@
       : `API request failed after ${API_MAX_RETRIES} attempts: ${lastErr?.message || 'Unknown error'}`);
   }
   function cleanFakLabText(payload) {
-    if (typeof payload === 'string' && payload.trim()) return payload.trim();
+    // Helper: remove only leading/trailing blank lines, preserving intentional formatting
+    const trimBlankLines = (text) => {
+      return text
+        .replace(/^\n+/, '')  // Remove only leading blank lines
+        .replace(/\n+$/, '');  // Remove only trailing blank lines
+    };
+
+    if (typeof payload === 'string' && payload.trim()) {
+      return trimBlankLines(payload);
+    }
     if (!payload || typeof payload !== 'object') throw new Error('Invalid API response format');
 
     const content =
@@ -1054,7 +1098,7 @@
     if (typeof content !== 'string' || !content.trim()) {
       throw new Error('Structured API response missing assistant content');
     }
-    return content.trim();
+    return trimBlankLines(content);
   }
 
   // ── SEND ──────────────────────────────────────────────────
