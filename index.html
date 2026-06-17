@@ -630,7 +630,7 @@
   <div class="modal">
     <button class="modal-close" onclick="closeAuth()"><i class="fa-solid fa-xmark"></i></button>
     <h3 id="authTitle">Welcome back</h3>
-    <p class="sub" id="authSub">Sign in to save your chats on this device.</p>
+    <p class="sub" id="authSub">Sign in to start a session on this device.</p>
     <div class="modal-tabs">
       <div class="modal-tab active" id="tabSignIn" onclick="switchAuthTab('signin')">Sign In</div>
       <div class="modal-tab" id="tabSignUp" onclick="switchAuthTab('signup')">Sign Up</div>
@@ -641,23 +641,27 @@
     </div>
     <label>Email</label>
     <input type="email" id="authEmail" placeholder="you@example.com"/>
-    <label>Password</label>
-    <input type="password" id="authPassword" placeholder="••••••••"/>
     <button class="modal-submit" onclick="submitAuth()" id="authSubmitBtn">Sign In</button>
-    <p class="modal-note">Stored locally in this browser only — no data leaves your device.</p>
+    <p class="modal-note">Session token is stored locally in this browser only — no data leaves your device.</p>
   </div>
 </div>
 
 <script>
   // ── CONFIG ──────────────────────────────────────────────
-  const FAKLAB_URL     = 'https://chatgpt-api.faizankhichi.me/?q=';
+  const FAKLAB_URL = 'https://chatgpt-api.faizankhichi.me/';
+  const API_TIMEOUT_MS = 15000;
+  const API_MAX_RETRIES = 3;
+  const API_RETRY_BASE_DELAY_MS = 600;
+  const API_HISTORY_LIMIT = 10;
+  const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+  const SYSTEM_PROMPT = 'You are Yahya\'s AI, a helpful, concise, and accurate assistant. Use the conversation context, avoid hallucinations, and clearly say when you are unsure.';
 
   // ── STATE ────────────────────────────────────────────────
   let msgCount = 0;
   let sidebarOpen = true;
   let conversationHistory = [];
   let currentChatId = null;
-  let currentUser = JSON.parse(localStorage.getItem('yai_user') || 'null');
+  let currentUser = getSessionUser();
 
   // ── INIT ─────────────────────────────────────────────────
   document.getElementById('yr').textContent = new Date().getFullYear();
@@ -687,6 +691,74 @@
 
   // ── AUTH (stored locally in this browser) ─────────────────
   function userKey() { return 'yai_chats_' + (currentUser ? currentUser.email : 'guest'); }
+  function readJSON(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; }
+    catch (err) {
+      console.warn('Failed to parse localStorage JSON for key:', key, err);
+      return fallback;
+    }
+  }
+  function sanitizeUsersDb(usersDb) {
+    let changed = false;
+    Object.keys(usersDb).forEach(email => {
+      const acc = usersDb[email] || {};
+      if ('password' in acc) {
+        const { password, ...safeAcc } = acc;
+        usersDb[email] = safeAcc;
+        changed = true;
+      }
+    });
+    if (changed) localStorage.setItem('yai_users', JSON.stringify(usersDb));
+    return usersDb;
+  }
+  function loadUsersDb() { return sanitizeUsersDb(readJSON('yai_users', {})); }
+  function saveUsersDb(usersDb) { localStorage.setItem('yai_users', JSON.stringify(usersDb)); }
+  function loadSessionsDb() { return readJSON('yai_sessions', {}); }
+  function saveSessionsDb(sessions) { localStorage.setItem('yai_sessions', JSON.stringify(sessions)); }
+  function clearSession() { localStorage.removeItem('yai_session'); }
+  function genSessionToken() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(24)))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  function createSession(email) {
+    const sessions = loadSessionsDb();
+    const token = genSessionToken();
+    const expiresAt = Date.now() + SESSION_DURATION_MS;
+    sessions[email] = { token, expiresAt };
+    saveSessionsDb(sessions);
+    localStorage.setItem('yai_session', JSON.stringify({ email, token }));
+  }
+  function getSessionUser() {
+    localStorage.removeItem('yai_user');
+    const session = readJSON('yai_session', null);
+    if (!session || !session.email || !session.token) return null;
+
+    const usersDb = loadUsersDb();
+    const sessions = loadSessionsDb();
+    const record = sessions[session.email];
+    const now = Date.now();
+    const isMissingRecord = !record;
+    const isTokenMismatch = !isMissingRecord && record.token !== session.token;
+    const isMissingExpiry = !isMissingRecord && !record.expiresAt;
+    const isExpired = !isMissingRecord && record.expiresAt < now;
+
+    if (isMissingRecord || isTokenMismatch || isMissingExpiry || isExpired) {
+      if (isExpired) {
+        delete sessions[session.email];
+        saveSessionsDb(sessions);
+      }
+      clearSession();
+      return null;
+    }
+
+    const acc = usersDb[session.email];
+    if (!acc) {
+      clearSession();
+      return null;
+    }
+    return { email: session.email, name: acc.name };
+  }
 
   function renderAuth() {
     const area = document.getElementById('authArea');
@@ -724,24 +796,23 @@
   function submitAuth() {
     const mode = document.getElementById('authSubmitBtn').dataset.mode || 'signin';
     const email = document.getElementById('authEmail').value.trim();
-    const password = document.getElementById('authPassword').value;
     const name = document.getElementById('authName').value.trim();
-    if (!email || !password) { alert('Please enter email and password.'); return; }
+    if (!email) { alert('Please enter email.'); return; }
 
-    const usersDb = JSON.parse(localStorage.getItem('yai_users') || '{}');
+    const usersDb = loadUsersDb();
 
     if (mode === 'signup') {
       if (usersDb[email]) { alert('An account with this email already exists. Try signing in.'); return; }
-      usersDb[email] = { name: name || email.split('@')[0], password };
-      localStorage.setItem('yai_users', JSON.stringify(usersDb));
+      usersDb[email] = { name: name || email.split('@')[0] };
+      saveUsersDb(usersDb);
     } else {
       const acc = usersDb[email];
-      if (!acc || acc.password !== password) { alert('Invalid email or password.'); return; }
+      if (!acc) { alert('No account found for this email. Please sign up first.'); return; }
     }
 
     const acc = usersDb[email];
+    createSession(email);
     currentUser = { email, name: acc.name };
-    localStorage.setItem('yai_user', JSON.stringify(currentUser));
     closeAuth();
     renderAuth();
     renderChats();
@@ -749,7 +820,7 @@
   }
   function logout() {
     currentUser = null;
-    localStorage.removeItem('yai_user');
+    clearSession();
     renderAuth();
     renderChats();
     newChat();
@@ -908,44 +979,82 @@
   }
 
   // ── API CALLS ─────────────────────────────────────────────
-  async function callFakLab(prompt) {
-    const url = FAKLAB_URL + encodeURIComponent(prompt);
-    const r = await fetch(url);
-    if (!r.ok) throw new Error('FAK LAB API error');
-    // API returns plain text — read as text, not JSON
-    const text = await r.text();
-    if (!text || text.trim() === '') throw new Error('Empty response');
-    // Try JSON parse just in case, otherwise use raw text
-    try {
-      const data = JSON.parse(text);
-      if (typeof data === 'string') return cleanFakLabText(data);
-      return cleanFakLabText(data.response || data.result || data.text || data.message || data.answer || text);
-    } catch {
-      return cleanFakLabText(text.trim());
+  function buildApiMessages() {
+    const historySlice = conversationHistory.slice(-API_HISTORY_LIMIT);
+    return [
+      { role: 'system', content: SYSTEM_PROMPT },
+      ...historySlice.map(msg => ({
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content
+      }))
+    ];
+  }
+  function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+  async function parseStructuredApiResponse(response) {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) return response.json();
+
+    const raw = await response.text();
+    if (!raw || !raw.trim()) throw new Error('Empty response');
+    try { return JSON.parse(raw); }
+    catch {
+      throw new Error(`API returned non-JSON response: ${raw.trim().slice(0, 120)}`);
     }
   }
+  async function callFakLab(messages) {
+    let lastErr;
+    for (let attempt = 0; attempt < API_MAX_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+      try {
+        const r = await fetch(FAKLAB_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages }),
+          signal: controller.signal
+        });
+        if (!r.ok) {
+          if (r.status >= 400 && r.status < 500) throw new Error(`API client error (${r.status})`);
+          throw new Error(`API temporary error (${r.status})`);
+        }
+        const data = await parseStructuredApiResponse(r);
+        return cleanFakLabText(data);
+      } catch (err) {
+        lastErr = err;
+        const isAbort = err.name === 'AbortError';
+        const isLastAttempt = attempt === API_MAX_RETRIES - 1;
+        const isRetryable = isAbort || /temporary error|Failed to fetch|NetworkError/i.test(err.message);
+        if (!isRetryable || isLastAttempt) break;
+        await delay(API_RETRY_BASE_DELAY_MS * (2 ** attempt));
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw new Error(lastErr?.name === 'AbortError'
+      ? `Request timed out after ${API_MAX_RETRIES} attempts`
+      : `API request failed after ${API_MAX_RETRIES} attempts: ${lastErr?.message || 'Unknown error'}`);
+  }
+  function cleanFakLabText(payload) {
+    if (typeof payload === 'string' && payload.trim()) return payload.trim();
+    if (!payload || typeof payload !== 'object') throw new Error('Invalid API response format');
 
-  // Strip FAK LAB branding header/footer from raw text responses
-  function cleanFakLabText(str) {
-    if (!str) return str;
-    const lines = str.split('\n');
-    const filtered = lines.filter(line => {
-      const l = line.toLowerCase();
-      if (l.includes('stay connected')) return false;
-      if (l.includes('whatsapp')) return false;
-      if (l.includes('faizankhichi.me')) return false;
-      if (l.includes('not for sale api')) return false;
-      if (l.includes('fak lab') || l.includes('faklab')) return false;
-      // Also catch unicode bold variants which won't lowercase normally,
-      // so check raw line too for key substrings
-      if (line.includes('FAK') || line.includes('𝗗') || line.includes('𝗥') ) return false;
-      return true;
-    });
-    let out = filtered.join('\n');
-    // Remove leftover separator lines (---, ___, ***, etc.) and excess blank lines
-    out = out.replace(/\n[\s]*(?:-{2,}|_{2,}|\*{2,}|—{2,}|─{2,})[\s]*\n/g, '\n');
-    out = out.replace(/\n{3,}/g, '\n\n');
-    return out.trim();
+    const content =
+      payload.response ||
+      payload.result ||
+      payload.text ||
+      payload.message ||
+      payload.answer ||
+      payload.data?.response ||
+      payload.data?.text ||
+      payload.choices?.[0]?.message?.content ||
+      payload.choices?.[0]?.text;
+
+    if (typeof content !== 'string' || !content.trim()) {
+      throw new Error('Structured API response missing assistant content');
+    }
+    return content.trim();
   }
 
   // ── SEND ──────────────────────────────────────────────────
@@ -967,7 +1076,8 @@
     let reply = '', usedModel = '';
 
     try {
-      reply = await callFakLab(query);
+      const apiMessages = buildApiMessages();
+      reply = await callFakLab(apiMessages);
       usedModel = "Yahya's AI";
     } catch (err) {
       reply = `⚠️ Error: ${err.message}. Please try again in a moment.`;
