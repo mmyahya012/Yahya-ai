@@ -957,6 +957,9 @@
   }
 
   function formatText(t) {
+    // Helper to wrap list items in proper list tags
+    const wrapListBlock = (tag, items) => '___LISTBLOCK___<' + tag + '>' + items.join('') + '</' + tag + '>___/LISTBLOCK___';
+
     let s = t
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/```[\s\S]*?```/g, m => {
@@ -965,43 +968,60 @@
       })
       .replace(/`([^`]+)`/g,'<code>$1</code>');
 
-    // Handle markdown lists before inline formatting
+    // Handle markdown lists before inline formatting, preserving them with markers
     const lines = s.split('\n');
-    let result = [];
+    let formatted = [];
     let inUL = false, inOL = false;
+    let listItems = [];
+    let currentListTag = '';
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    for (const line of lines) {
       const ulMatch = line.match(/^[\-\*]\s+(.*)$/);
       const olMatch = line.match(/^\d+\.\s+(.*)$/);
 
       if (ulMatch) {
-        if (!inUL) {
-          if (inOL) result.push('</ol>'); inOL = false;
-          result.push('<ul>');
+        if (!inUL || inOL) {
+          if (listItems.length > 0 && currentListTag) {
+            formatted.push(wrapListBlock(currentListTag, listItems));
+          }
           inUL = true;
+          inOL = false;
+          currentListTag = 'ul';
+          listItems = [];
         }
-        result.push(`<li>${ulMatch[1]}</li>`);
+        listItems.push(`<li>${ulMatch[1]}</li>`);
       } else if (olMatch) {
-        if (!inOL) {
-          if (inUL) result.push('</ul>'); inUL = false;
-          result.push('<ol>');
+        if (!inOL || inUL) {
+          if (listItems.length > 0 && currentListTag) {
+            formatted.push(wrapListBlock(currentListTag, listItems));
+          }
           inOL = true;
+          inUL = false;
+          currentListTag = 'ol';
+          listItems = [];
         }
-        result.push(`<li>${olMatch[1]}</li>`);
+        listItems.push(`<li>${olMatch[1]}</li>`);
       } else {
-        if (inUL) { result.push('</ul>'); inUL = false; }
-        if (inOL) { result.push('</ol>'); inOL = false; }
-        result.push(line);
+        if (listItems.length > 0 && currentListTag) {
+          formatted.push(wrapListBlock(currentListTag, listItems));
+          listItems = [];
+          inUL = false;
+          inOL = false;
+          currentListTag = '';
+        }
+        formatted.push(line);
       }
     }
-    if (inUL) result.push('</ul>');
-    if (inOL) result.push('</ol>');
 
-    s = result.join('\n')
+    if (listItems.length > 0 && currentListTag) {
+      formatted.push(wrapListBlock(currentListTag, listItems));
+    }
+
+    s = formatted.join('\n')
       .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
       .replace(/\*(.+?)\*/g,'<em>$1</em>')
-      .replace(/\n/g,'<br>');
+      .replace(/\n/g,'<br>')
+      .replace(/___LISTBLOCK___([\s\S]*?)___\/LISTBLOCK___/g, '$1');
     return s;
   }
   function escapeAttr(s) { return s.replace(/'/g,"\\'").replace(/\n/g,' ').substring(0,200); }
