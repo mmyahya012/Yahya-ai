@@ -999,7 +999,9 @@
     const raw = await response.text();
     if (!raw || !raw.trim()) throw new Error('Empty response');
     try { return JSON.parse(raw); }
-    catch { throw new Error('API returned non-JSON response'); }
+    catch {
+      throw new Error(`API returned non-JSON response: ${raw.trim().slice(0, 120)}`);
+    }
   }
   async function callFakLab(messages) {
     let lastErr;
@@ -1014,7 +1016,7 @@
           signal: controller.signal
         });
         if (!r.ok) {
-          if (r.status >= 400 && r.status < 500) throw new Error(`API request failed (${r.status})`);
+          if (r.status >= 400 && r.status < 500) throw new Error(`API client error (${r.status})`);
           throw new Error(`API temporary error (${r.status})`);
         }
         const data = await parseStructuredApiResponse(r);
@@ -1032,7 +1034,7 @@
     }
     throw new Error(lastErr?.name === 'AbortError'
       ? `Request timed out after ${API_MAX_RETRIES} attempts`
-      : (lastErr?.message || 'API request failed'));
+      : `API request failed after ${API_MAX_RETRIES} attempts: ${lastErr?.message || 'Unknown error'}`);
   }
   function cleanFakLabText(payload) {
     if (typeof payload === 'string' && payload.trim()) return payload.trim();
