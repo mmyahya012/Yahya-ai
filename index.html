@@ -957,19 +957,75 @@
   }
 
   function formatText(t) {
+    // Helper to wrap list items in proper list tags using template literals
+    const wrapListBlock = (tag, items) => `___LISTBLOCK___<${tag}>${items.join('')}</${tag}>___/LISTBLOCK___`;
+
     let s = t
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
       .replace(/```[\s\S]*?```/g, m => {
         const code = m.replace(/```(\w+)?/g,'').trim();
         return `<pre><code>${code}</code></pre>`;
       })
-      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>');
+
+    // Handle markdown lists before inline formatting, preserving them with markers
+    const lines = s.split('\n');
+    let formatted = [];
+    let inUL = false, inOL = false;
+    let listItems = [];
+    let currentListTag = '';
+
+    for (const line of lines) {
+      const ulMatch = line.match(/^[\-\*]\s+(.*)$/);
+      const olMatch = line.match(/^\d+\.\s+(.*)$/);
+
+      if (ulMatch) {
+        if (!inUL || inOL) {
+          if (listItems.length > 0 && currentListTag) {
+            formatted.push(wrapListBlock(currentListTag, listItems));
+          }
+          inUL = true;
+          inOL = false;
+          currentListTag = 'ul';
+          listItems = [];
+        }
+        listItems.push(`<li>${ulMatch[1]}</li>`);
+      } else if (olMatch) {
+        if (!inOL || inUL) {
+          if (listItems.length > 0 && currentListTag) {
+            formatted.push(wrapListBlock(currentListTag, listItems));
+          }
+          inOL = true;
+          inUL = false;
+          currentListTag = 'ol';
+          listItems = [];
+        }
+        listItems.push(`<li>${olMatch[1]}</li>`);
+      } else {
+        if (listItems.length > 0 && currentListTag) {
+          formatted.push(wrapListBlock(currentListTag, listItems));
+          listItems = [];
+          inUL = false;
+          inOL = false;
+          currentListTag = '';
+        }
+        formatted.push(line);
+      }
+    }
+
+    if (listItems.length > 0 && currentListTag) {
+      formatted.push(wrapListBlock(currentListTag, listItems));
+    }
+
+    s = formatted.join('\n')
       .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
       .replace(/\*(.+?)\*/g,'<em>$1</em>')
-      .replace(/\n/g,'<br>');
+      .replace(/\n/g,'<br>')
+      .replace(/___LISTBLOCK___([\s\S]*?)___\/LISTBLOCK___/g, '$1');
     return s;
   }
   function escapeAttr(s) { return s.replace(/'/g,"\\'").replace(/\n/g,' ').substring(0,200); }
+  function trimBlankLines(text) { return text.replace(/^\n+/, '').replace(/\n+$/, ''); }
 
   function copyText(btn, text) {
     navigator.clipboard.writeText(text).then(() => {
@@ -1037,7 +1093,9 @@
       : `API request failed after ${API_MAX_RETRIES} attempts: ${lastErr?.message || 'Unknown error'}`);
   }
   function cleanFakLabText(payload) {
-    if (typeof payload === 'string' && payload.trim()) return payload.trim();
+    if (typeof payload === 'string' && payload.trim()) {
+      return trimBlankLines(payload);
+    }
     if (!payload || typeof payload !== 'object') throw new Error('Invalid API response format');
 
     const content =
@@ -1054,7 +1112,7 @@
     if (typeof content !== 'string' || !content.trim()) {
       throw new Error('Structured API response missing assistant content');
     }
-    return content.trim();
+    return trimBlankLines(content);
   }
 
   // ── SEND ──────────────────────────────────────────────────
