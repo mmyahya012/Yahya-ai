@@ -630,7 +630,7 @@
   <div class="modal">
     <button class="modal-close" onclick="closeAuth()"><i class="fa-solid fa-xmark"></i></button>
     <h3 id="authTitle">Welcome back</h3>
-    <p class="sub" id="authSub">Sign in to save your chats on this device.</p>
+    <p class="sub" id="authSub">Sign in to start a secure session on this device.</p>
     <div class="modal-tabs">
       <div class="modal-tab active" id="tabSignIn" onclick="switchAuthTab('signin')">Sign In</div>
       <div class="modal-tab" id="tabSignUp" onclick="switchAuthTab('signup')">Sign Up</div>
@@ -641,10 +641,8 @@
     </div>
     <label>Email</label>
     <input type="email" id="authEmail" placeholder="you@example.com"/>
-    <label>Password</label>
-    <input type="password" id="authPassword" placeholder="••••••••"/>
     <button class="modal-submit" onclick="submitAuth()" id="authSubmitBtn">Sign In</button>
-    <p class="modal-note">Stored locally in this browser only — no data leaves your device.</p>
+    <p class="modal-note">Session token is stored locally in this browser only — no data leaves your device.</p>
   </div>
 </div>
 
@@ -657,7 +655,7 @@
   let sidebarOpen = true;
   let conversationHistory = [];
   let currentChatId = null;
-  let currentUser = JSON.parse(localStorage.getItem('yai_user') || 'null');
+  let currentUser = getSessionUser();
 
   // ── INIT ─────────────────────────────────────────────────
   document.getElementById('yr').textContent = new Date().getFullYear();
@@ -687,6 +685,66 @@
 
   // ── AUTH (stored locally in this browser) ─────────────────
   function userKey() { return 'yai_chats_' + (currentUser ? currentUser.email : 'guest'); }
+  function readJSON(key, fallback) {
+    try { return JSON.parse(localStorage.getItem(key) || 'null') ?? fallback; }
+    catch { return fallback; }
+  }
+  function sanitizeUsersDb(usersDb) {
+    let changed = false;
+    Object.keys(usersDb).forEach(email => {
+      const acc = usersDb[email] || {};
+      if ('password' in acc) {
+        const { password, ...safeAcc } = acc;
+        usersDb[email] = safeAcc;
+        changed = true;
+      }
+    });
+    if (changed) localStorage.setItem('yai_users', JSON.stringify(usersDb));
+    return usersDb;
+  }
+  function loadUsersDb() { return sanitizeUsersDb(readJSON('yai_users', {})); }
+  function saveUsersDb(usersDb) { localStorage.setItem('yai_users', JSON.stringify(usersDb)); }
+  function loadSessionsDb() { return readJSON('yai_sessions', {}); }
+  function saveSessionsDb(sessions) { localStorage.setItem('yai_sessions', JSON.stringify(sessions)); }
+  function clearSession() { localStorage.removeItem('yai_session'); }
+  function genSessionToken() {
+    return Array.from(crypto.getRandomValues(new Uint8Array(24)))
+      .map(b => b.toString(16).padStart(2, '0'))
+      .join('');
+  }
+  function createSession(email) {
+    const sessions = loadSessionsDb();
+    const token = genSessionToken();
+    const expiresAt = Date.now() + (7 * 24 * 60 * 60 * 1000);
+    sessions[email] = { token, expiresAt };
+    saveSessionsDb(sessions);
+    localStorage.setItem('yai_session', JSON.stringify({ email, token }));
+  }
+  function getSessionUser() {
+    localStorage.removeItem('yai_user');
+    const session = readJSON('yai_session', null);
+    if (!session || !session.email || !session.token) return null;
+
+    const usersDb = loadUsersDb();
+    const sessions = loadSessionsDb();
+    const record = sessions[session.email];
+
+    if (!record || record.token !== session.token || !record.expiresAt || record.expiresAt < Date.now()) {
+      if (record && record.expiresAt < Date.now()) {
+        delete sessions[session.email];
+        saveSessionsDb(sessions);
+      }
+      clearSession();
+      return null;
+    }
+
+    const acc = usersDb[session.email];
+    if (!acc) {
+      clearSession();
+      return null;
+    }
+    return { email: session.email, name: acc.name };
+  }
 
   function renderAuth() {
     const area = document.getElementById('authArea');
@@ -717,31 +775,30 @@
     document.getElementById('authTitle').textContent = isSignup ? 'Create your account' : 'Welcome back';
     document.getElementById('authSub').textContent = isSignup
       ? 'Sign up to save your chats on this device.'
-      : 'Sign in to access your saved chats.';
+      : 'Sign in to access your saved chats with a secure session token.';
     document.getElementById('authSubmitBtn').textContent = isSignup ? 'Sign Up' : 'Sign In';
     document.getElementById('authSubmitBtn').dataset.mode = tab;
   }
   function submitAuth() {
     const mode = document.getElementById('authSubmitBtn').dataset.mode || 'signin';
     const email = document.getElementById('authEmail').value.trim();
-    const password = document.getElementById('authPassword').value;
     const name = document.getElementById('authName').value.trim();
-    if (!email || !password) { alert('Please enter email and password.'); return; }
+    if (!email) { alert('Please enter email.'); return; }
 
-    const usersDb = JSON.parse(localStorage.getItem('yai_users') || '{}');
+    const usersDb = loadUsersDb();
 
     if (mode === 'signup') {
       if (usersDb[email]) { alert('An account with this email already exists. Try signing in.'); return; }
-      usersDb[email] = { name: name || email.split('@')[0], password };
-      localStorage.setItem('yai_users', JSON.stringify(usersDb));
+      usersDb[email] = { name: name || email.split('@')[0] };
+      saveUsersDb(usersDb);
     } else {
       const acc = usersDb[email];
-      if (!acc || acc.password !== password) { alert('Invalid email or password.'); return; }
+      if (!acc) { alert('No account found for this email. Please sign up first.'); return; }
     }
 
     const acc = usersDb[email];
+    createSession(email);
     currentUser = { email, name: acc.name };
-    localStorage.setItem('yai_user', JSON.stringify(currentUser));
     closeAuth();
     renderAuth();
     renderChats();
@@ -749,7 +806,7 @@
   }
   function logout() {
     currentUser = null;
-    localStorage.removeItem('yai_user');
+    clearSession();
     renderAuth();
     renderChats();
     newChat();
